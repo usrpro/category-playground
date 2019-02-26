@@ -3,8 +3,9 @@ package main
 import (
 	"flag"
 	"math/rand"
-	"net/http"
 	"time"
+
+	"github.com/valyala/fasthttp"
 
 	log "gopkg.in/inconshreveable/log15.v2"
 )
@@ -29,12 +30,28 @@ func initLog() {
 	rand.Seed(time.Now().UnixNano())
 }
 
+func requestHandler(ctx *fasthttp.RequestCtx) {
+	rl := log.New("ConnID", ctx.ConnID(), "ReqID", ctx.ID())
+	rl.Debug("Request start", "uri", string(ctx.RequestURI()))
+	h := "none"
+	switch string(ctx.Path()) {
+	case "/bc":
+		h = "bcHandler"
+		bcHandler(ctx, rl)
+	case "/cat":
+		h = "catHandler"
+		catHandler(ctx, rl)
+	default:
+		ctx.NotFound()
+	}
+	dt := float64((time.Now().UnixNano() - ctx.Time().UnixNano())) / 1000000 // ms
+	rl.Info("Request handled", "handler", h, "duration", dt)
+}
+
 func main() {
 	parseFlags()
 	initDb()
-	http.HandleFunc("/bc/", bcHandler)
-	http.HandleFunc("/cat/", catHandler)
-	if err := http.ListenAndServe("0.0.0.0:8012", nil); err != nil {
+	if err := fasthttp.ListenAndServe("0.0.0.0:8012", requestHandler); err != nil {
 		log.Warn("ListenAndServe terminated", "error", err)
 	}
 }

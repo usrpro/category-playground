@@ -2,127 +2,150 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"math/rand"
-	"net/http"
 	"sort"
-	"strconv"
-	"strings"
-	"time"
+
+	"github.com/valyala/fasthttp"
 
 	log "gopkg.in/inconshreveable/log15.v2"
 )
 
-func logHTTPError(w http.ResponseWriter, r *http.Request, err error, code int, info ...string) {
-	var f func(string, ...interface{})
-	switch {
-	case code < 300:
-		f = log.Debug
-	case code < 400:
-		f = log.Info
-	case code < 500:
-		f = log.Warn
-	default:
-		f = log.Error
-	}
-	guru := strconv.Itoa(rand.Int())
-	info = append(info, "Guru meditation:", guru)
-	msg := strings.Join(info, " ")
-	f(err.Error(), "code", code, "uri", r.RequestURI, "guru", guru, "msg", msg)
-	http.Error(w, msg, code)
+func internalError(ctx *fasthttp.RequestCtx, rl log.Logger, err error) {
+
 }
 
-func badRequest(w http.ResponseWriter, r *http.Request) {
-	log.Warn("Bad request URI", "uri", r.RequestURI)
-	http.Error(w, "Invalid URI format", http.StatusBadRequest)
+// Category model.
+type Category struct {
+	ID       int
+	Name     string
+	Parent   int
+	Children []*Category
 }
 
-type categoryMap map[int]*category
+// CategoryMap a map of Category pointers and associates an index with it, for ordered output.
+// The order of the index is based on the order items where added.
+type CategoryMap struct {
+	cats  map[int]*Category
+	index []int
+}
 
-func (cm categoryMap) sort() (index []int) {
-	for k := range cm {
-		index = append(index, k)
-	}
-	sort.Ints(index)
+// NewCm initializes and returs a pointer to a new CategoryMap.
+func NewCm() (cm *CategoryMap) {
+	cm.cats = make(map[int]*Category)
 	return
 }
 
-type category struct {
-	ID       int
-	Data     string
-	Parent   int
-	Children []*category
+// Sort re-indexes the CategoryMap, increasing order on category id.
+// It is advised to add the categories in a sorted way instead of using this method.
+func (cm *CategoryMap) Sort() {
+	sort.Ints(cm.index)
 }
 
-func catHandler(w http.ResponseWriter, r *http.Request) {
-	log.Debug("Request", "uri", r.RequestURI)
-	a := time.Now().UnixNano()
-	// Still hard-coded, needs to be taken from request params.
-	offset, depth := 0, 6
-	rows, err := db.Query("cat-tree-v2", offset, depth)
-	if err != nil {
-		logHTTPError(w, r, err, http.StatusInternalServerError)
+// Set a Category point to the map, only if it was not already added.
+// It will also be appeneded to the index, keeping the order of calling this function.
+func (cm *CategoryMap) Set(c *Category) {
+	if cm.cats[c.ID] != nil {
 		return
 	}
-	cm := make(categoryMap)
-	for rows.Next() {
-		var i, p int
-		var d string
-		if err := rows.Scan(&i, &d, &p); err != nil {
-			logHTTPError(w, r, err, http.StatusInternalServerError)
-			return
-		}
-		c := &category{
-			ID:     i,
-			Data:   d,
-			Parent: p,
-		}
-		cm[c.ID] = c
-	}
-	root := []*category{}
-	for _, i := range cm.sort() {
-		c := cm[i]
+	cm.cats[c.ID] = c
+	cm.index = append(cm.index, c.ID)
+}
+
+// Get a Category pointer by its id.
+func (cm *CategoryMap) Get(id int) (c *Category) {
+	return cm.cats[id]
+}
+
+// Index returns a struct of category id. It allows for a sorted range loop.
+func (cm *CategoryMap) Index() []int {
+	return cm.index
+}
+
+// Tree creates decendant tree by population the Category's children.
+// It returns a slice of Category pointers, representing the root of the tree.
+func (cm *CategoryMap) Tree(offset int) (root []*Category) {
+	for _, i := range cm.Index() {
+		c := cm.Get(i)
 		// Are we at the root of the tree?
 		if c.Parent == offset {
 			root = append(root, c)
 			continue
 		}
-		p := cm[c.Parent]
-		// Append category to its parent's children
+		p := cm.Get(c.Parent)
+		// Append Category to its parent's children
 		p.Children = append(p.Children, c)
 	}
-	js, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		logHTTPError(w, r, err, http.StatusInternalServerError)
-		return
-	}
-	dt := float64((time.Now().UnixNano() - a)) / 1000000 // ms
-	log.Info("Request completed", "uri", r.RequestURI, "ms", dt)
-	w.Write(js)
+	return
 }
 
-func bcHandler(w http.ResponseWriter, r *http.Request) {
-	log.Debug("Request", "uri", r.RequestURI)
-	if r.RequestURI == "/bc/" || r.RequestURI == "/bc/0" {
-		logHTTPError(w, r, errors.New("No content"), http.StatusNoContent, "No content")
+// JSONTree returns a JSON document, representing the parent /
+// child relationship of the categories in a tree.
+// It returns an error if json.Marshall does.
+func (cm *CategoryMap) JSONTree(offset int) ([]byte, error) {
+	return json.MarshalIndent(cm.Tree(offset), "", "  ")
+}
+
+func catQuery(offset, depth int) (cm *CategoryMap, err error) {
+	rows, err := db.Query("cat-tree-v2", offset, depth)
+	if err != nil {
 		return
 	}
-	p := strings.Split(r.RequestURI, "/")
-	log.Debug("Parsed", "path", p, "level", len(p))
-	cid, err := strconv.Atoi(p[len(p)-1])
-	if err != nil {
-		logHTTPError(w, r, err, http.StatusBadRequest, "Bad request")
+	cm = NewCm()
+	for rows.Next() {
+		var i, p int
+		var n string
+		if err = rows.Scan(&i, &n, &p); err != nil {
+			return
+		}
+		c := &Category{
+			ID:     i,
+			Name:   n,
+			Parent: p,
+		}
+		cm.Set(c)
+	}
+	return
+}
+
+func catHandler(ctx *fasthttp.RequestCtx, rl log.Logger) {
+	a := ctx.QueryArgs()
+	offset, depth := a.GetUintOrZero("offset"), a.GetUintOrZero("depth")
+	if depth == 0 {
+		rl.Warn("Requested depth of 0 or emtpy in catHandler")
+		ctx.Error("depth cannot be 0", fasthttp.StatusBadRequest)
 		return
+	}
+	cm, err := catQuery(offset, depth)
+	if err != nil {
+		rl.Error(err.Error())
+		ctx.Error("Internal server error", fasthttp.StatusInternalServerError)
+		return
+	}
+	js, err := cm.JSONTree(offset)
+	if err != nil {
+		rl.Error(err.Error())
+		ctx.Error("Internal server error", fasthttp.StatusInternalServerError)
+		return
+	}
+	ctx.Write(js)
+}
+
+func bcHandler(ctx *fasthttp.RequestCtx, rl log.Logger) {
+	a := ctx.QueryArgs()
+	cid := a.GetUintOrZero("cat-id")
+	if cid == 0 {
+		rl.Info("No content in bcHandler")
+		ctx.SetStatusCode(fasthttp.StatusNoContent)
 	}
 	row, err := db.QueryRow("bc-json", cid)
 	if err != nil {
-		logHTTPError(w, r, err, http.StatusInternalServerError)
+		internalError(ctx, rl, err)
 		return
 	}
-	var j string
-	if err := row.Scan(&j); err != nil {
-		logHTTPError(w, r, err, http.StatusBadRequest, "Category id doesn't exist")
+	var js []byte
+	if err := row.Scan(&js); err != nil {
+		rl.Warn("Category id does not exist in bcHandler")
+		ctx.Error("Category id does not exist", fasthttp.StatusBadRequest)
 		return
 	}
-	w.Write([]byte(j))
+	ctx.Write(js)
 }

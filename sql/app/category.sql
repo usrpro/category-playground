@@ -5,11 +5,11 @@ FROM (
     WITH RECURSIVE
         q AS
         (
-        SELECT  h.*, 1 AS level
+        SELECT  h.*
         FROM    categories h
         WHERE   id = $1
         UNION ALL
-        SELECT  hp.*, level + 1
+        SELECT  hp.*
         FROM    q
         JOIN    categories hp
         ON      hp.id = q.parent
@@ -17,7 +17,7 @@ FROM (
     SELECT id, parent, data
     FROM    q
     ORDER BY
-            level DESC
+            id asc
 ) AS crumbs;
 
 -- name: cat-tree

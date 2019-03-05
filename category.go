@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"sort"
 
 	"github.com/valyala/fasthttp"
@@ -29,9 +30,11 @@ type CategoryMap struct {
 }
 
 // NewCm initializes and returs a pointer to a new CategoryMap.
-func NewCm() (cm *CategoryMap) {
-	cm.cats = make(map[int]*Category)
-	return
+func NewCm() *CategoryMap {
+	cats := make(map[int]*Category)
+	return &CategoryMap{
+		cats: cats,
+	}
 }
 
 // Sort re-indexes the CategoryMap, increasing order on category id.
@@ -82,6 +85,10 @@ func (cm *CategoryMap) Tree(offset int) (root []*Category) {
 // It returns an error if json.Marshall does.
 func (cm *CategoryMap) JSONTree(offset int) ([]byte, error) {
 	return json.MarshalIndent(cm.Tree(offset), "", "  ")
+}
+
+func (cm *CategoryMap) XMLTree(offset int) ([]byte, error) {
+	return xml.MarshalIndent(cm.Tree(offset), "", "  ")
 }
 
 func catQuery(offset, depth int) (cm *CategoryMap, err error) {

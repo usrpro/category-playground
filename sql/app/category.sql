@@ -14,7 +14,7 @@ FROM (
         JOIN    categories hp
         ON      hp.id = q.parent
         )
-    SELECT id, parent, data
+    SELECT id, parent, name
     FROM    q
     ORDER BY
             id asc
@@ -44,20 +44,20 @@ ORDER BY
 
 with recursive categories_from_parents as
 (
-      select id, data, parent, '{}'::int[] as parents, 0 as level
+      select id, name, parent, '{}'::int[] as parents, 0 as level
         from categories
        where parent = $1  -- Offset
 
    union all
 
-      select c.id, c.data, c.parent, parents || c.parent, level+1
+      select c.id, c.name, c.parent, parents || c.parent, level+1
         from      categories_from_parents p
              join categories c
                on c.parent = p.id
         where not c.id = any(parents) -- Loop protector
         and level < $2 -- Depth limit
 )
-select id, data, parent 
+select id, name, parent 
   from categories_from_parents;
 
 -- name: recursive-cat
